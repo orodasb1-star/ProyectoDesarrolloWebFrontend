@@ -1,0 +1,118 @@
+diff --git a/services/qr-service/src/controllers/qr.controller.js b/services/qr-service/src/controllers/qr.controller.js
+index fe99f4febf9cd0f33a04035f3af5c966946d8927..9b4aeb795debb044e12cc2f266230b574fa84391 100644
+--- a/services/qr-service/src/controllers/qr.controller.js
++++ b/services/qr-service/src/controllers/qr.controller.js
+@@ -31,6 +31,18 @@ class QrController {
+     }
+   };
+ 
++  getMisValidaciones = async (req, res, next) => {
++    try {
++      const data = await this.qrService.getMisValidaciones(req.user.id, req.query.fecha);
++      res.status(200).json({
++        success: true,
++        data
++      });
++    } catch (err) {
++      next(err);
++    }
++  };
++
+   validarYEntregar = async (req, res, next) => {
+     try {
+       const { id } = req.params;
+diff --git a/services/qr-service/src/routes/qr.routes.js b/services/qr-service/src/routes/qr.routes.js
+index f625a7ca3992f60e8a3a8c2f5605eba30a5d33a6..1313f5201cf70252dbad2296fdc12520518c040c 100644
+--- a/services/qr-service/src/routes/qr.routes.js
++++ b/services/qr-service/src/routes/qr.routes.js
+@@ -4,7 +4,7 @@ const {
+   authenticateJwt,
+   requireRole
+ } = require('@irtra/shared');
+-const { idParamSchema, escanearQrSchema } = require('../validators/qr.validator');
++const { idParamSchema, escanearQrSchema, misValidacionesQuerySchema } = require('../validators/qr.validator');
+ 
+ /**
+  * Enrutador de operaciones de códigos QR.
+@@ -31,6 +31,15 @@ function createQrRouter(qrController, redis) {
+     qrController.escanear
+   );
+ 
++  // --- EMPLEADO: Historial de sus validaciones de un día (por defecto hoy en Guatemala) ---
++  router.get(
++    '/mis-validaciones',
++    authenticateJwt(redis),
++    requireRole('EMPLEADO', 'ADMINISTRADOR'),
++    validateRequest({ query: misValidacionesQuerySchema }),
++    qrController.getMisValidaciones
++  );
++
+   // --- EMPLEADO: Validación y entrega atómica con bloqueo pesimista ---
+   router.post(
+     '/:id/validar-entregar',
+diff --git a/services/qr-service/src/services/qr.service.js b/services/qr-service/src/services/qr.service.js
+index 3447fa24eecfdea77a51c6f3a1f9bf5b5c4f898e..69862399ae4b6c7b4709222ef25fda5508a87685 100644
+--- a/services/qr-service/src/services/qr.service.js
++++ b/services/qr-service/src/services/qr.service.js
+@@ -434,6 +434,44 @@ class QrService {
+     });
+   }
+ 
++  /**
++   * EMPLEADO: validaciones (exitosas y rechazadas) que hizo en un día, en hora de Guatemala.
++   * @param {number} empleadoId
++   * @param {string} [fecha] YYYY-MM-DD, por defecto hoy
++   */
++  async getMisValidaciones(empleadoId, fecha) {
++    const dia = fecha || this.getTodayGuatemala();
++    const res = await this.pool.query(
++      `SELECT
++         v.id,
++         v.codigo_qr_id,
++         v.resultado,
++         v.observacion,
++         v.fecha_validacion,
++         CASE WHEN q.registro_visita_id IS NOT NULL THEN 'REGISTRO_VISITA' ELSE 'PEDIDO' END AS tipo,
++         ped.numero_pedido,
++         rv.total_personas,
++         pk.nombre AS parque,
++         u.nombres || ' ' || u.apellidos AS titular
++       FROM validaciones_qr v
++       INNER JOIN codigos_qr q ON q.id = v.codigo_qr_id
++       LEFT JOIN pedidos ped ON ped.id = q.pedido_id
++       LEFT JOIN registros_visita rv ON rv.id = COALESCE(q.registro_visita_id, ped.registro_visita_id)
++       LEFT JOIN parques pk ON pk.id = rv.parque_id
++       LEFT JOIN usuarios u ON u.id = rv.usuario_id
++       WHERE v.empleado_id = $1
++         AND (v.fecha_validacion AT TIME ZONE 'America/Guatemala')::date = $2::date
++       ORDER BY v.fecha_validacion DESC`,
++      [empleadoId, dia]
++    );
++    return res.rows.map((r) => ({
++      ...r,
++      referencia: r.resultado === 'RECHAZADO'
++        ? r.observacion
++        : (r.tipo === 'PEDIDO' ? r.numero_pedido : `${r.total_personas} personas`)
++    }));
++  }
++
+   /**
+    * Tarea programada: pasa a EXPIRADO los QR vencidos.
+    */
+diff --git a/services/qr-service/src/validators/qr.validator.js b/services/qr-service/src/validators/qr.validator.js
+index 901fa885f4ac174f2ccf743b90b45daf99c59683..3c3156c0706acdac0ea798954dffb0062da7f807 100644
+--- a/services/qr-service/src/validators/qr.validator.js
++++ b/services/qr-service/src/validators/qr.validator.js
+@@ -17,7 +17,12 @@ const generarQrInternalSchema = z.object({
+   { message: 'Debe especificarse exactamente uno de registro_visita_id o pedido_id' }
+ );
+ 
++const misValidacionesQuerySchema = z.object({
++  fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'La fecha debe tener formato YYYY-MM-DD').optional()
++});
++
+ module.exports = {
++  misValidacionesQuerySchema,
+   idParamSchema,
+   escanearQrSchema,
+   generarQrInternalSchema

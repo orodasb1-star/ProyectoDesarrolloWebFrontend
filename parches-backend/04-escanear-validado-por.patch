@@ -1,0 +1,45 @@
+diff --git a/services/qr-service/src/services/qr.service.js b/services/qr-service/src/services/qr.service.js
+index 18ca80b6599ccdaf91f3690bb81beeaf1e86585c..3447fa24eecfdea77a51c6f3a1f9bf5b5c4f898e 100644
+--- a/services/qr-service/src/services/qr.service.js
++++ b/services/qr-service/src/services/qr.service.js
+@@ -215,6 +215,24 @@ class QrService {
+       throw new BadRequestError('El código QR es inválido o su firma ha sido alterada');
+     }
+ 
++    // 2.1 Si ya fue entregado, informar quién lo validó (requisito: fecha, hora y empleado)
++    let validadoPor = null;
++    if (qr.estado === 'ENTREGADO') {
++      const valRes = await this.pool.query(
++        `SELECT v.empleado_id, v.fecha_validacion, u.nombres, u.apellidos
++         FROM validaciones_qr v
++         INNER JOIN usuarios u ON u.id = v.empleado_id
++         WHERE v.codigo_qr_id = $1 AND v.resultado = 'VALIDADO_ENTREGADO'
++         ORDER BY v.fecha_validacion DESC
++         LIMIT 1`,
++        [qr.id]
++      );
++      if (valRes.rows[0]) {
++        const v = valRes.rows[0];
++        validadoPor = `${v.nombres} ${v.apellidos}`;
++      }
++    }
++
+     // 3. Detalle si es de un REGISTRO DE VISITA
+     if (qr.registro_visita_id) {
+       const regRes = await this.pool.query(
+@@ -242,6 +260,7 @@ class QrService {
+         estado_qr: qr.estado,
+         fecha_expiracion: qr.fecha_expiracion,
+         fecha_validacion: qr.fecha_validacion,
++        validado_por: validadoPor,
+         titular: {
+           nombres: registro.nombres,
+           apellidos: registro.apellidos,
+@@ -286,6 +305,7 @@ class QrService {
+         estado_qr: qr.estado,
+         fecha_expiracion: qr.fecha_expiracion,
+         fecha_validacion: qr.fecha_validacion,
++        validado_por: validadoPor,
+         numero_pedido: pedido.numero_pedido,
+         estado_pedido: pedido.estado,
+         parque: pedido.parque_nombre,

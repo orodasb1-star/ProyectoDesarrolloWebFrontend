@@ -1,0 +1,69 @@
+diff --git a/services/visits-service/src/controllers/visits.controller.js b/services/visits-service/src/controllers/visits.controller.js
+index b6c5e2fb4ac324d881059808b2747efc09d80d40..30ffc632c45a576729b0710fad28fb05b82ec576 100644
+--- a/services/visits-service/src/controllers/visits.controller.js
++++ b/services/visits-service/src/controllers/visits.controller.js
+@@ -85,6 +85,18 @@ class VisitsController {
+     }
+   };
+ 
++  getMisPedidos = async (req, res, next) => {
++    try {
++      const pedidos = await this.visitsService.getMisPedidos(req.user.id);
++      res.status(200).json({
++        success: true,
++        data: pedidos
++      });
++    } catch (err) {
++      next(err);
++    }
++  };
++
+   getPedidoById = async (req, res, next) => {
+     try {
+       const { id } = req.params;
+diff --git a/services/visits-service/src/routes/visits.routes.js b/services/visits-service/src/routes/visits.routes.js
+index 6517c6a99addfe7ba13eb4f6c34e205901bed9d2..12247231605c9cee7d99162a79462c320b6afb57 100644
+--- a/services/visits-service/src/routes/visits.routes.js
++++ b/services/visits-service/src/routes/visits.routes.js
+@@ -66,6 +66,9 @@ function createVisitsRouter(visitsController, redis) {
+     visitsController.getPedidosByRegistro
+   );
+ 
++  // 6.1 Listar todos los pedidos del cliente (historial tipo estado de cuenta)
++  router.get('/pedidos', visitsController.getMisPedidos);
++
+   // 7. Ver detalle de un pedido
+   router.get(
+     '/pedidos/:id',
+diff --git a/services/visits-service/src/services/visits.service.js b/services/visits-service/src/services/visits.service.js
+index 7eec796e6cb5a30b387f5f25d6fbe845aa6d91e2..9a979df423ec7d511e1f632a708701a4100707eb 100644
+--- a/services/visits-service/src/services/visits.service.js
++++ b/services/visits-service/src/services/visits.service.js
+@@ -426,6 +426,27 @@ class VisitsService {
+     }));
+   }
+ 
++  /**
++   * Lista todos los pedidos del cliente, de todas sus visitas, del más reciente al más antiguo.
++   */
++  async getMisPedidos(usuarioId) {
++    const res = await this.pool.query(
++      `SELECT p.*, rv.codigo_registro, rv.fecha_visita, rv.parque_id, pk.nombre AS parque_nombre
++       FROM pedidos p
++       INNER JOIN registros_visita rv ON rv.id = p.registro_visita_id
++       INNER JOIN parques pk ON pk.id = rv.parque_id
++       WHERE rv.usuario_id = $1
++       ORDER BY p.created_at DESC, p.id DESC`,
++      [usuarioId]
++    );
++
++    return res.rows.map((row) => ({
++      ...row,
++      subtotal: formatMoney(row.subtotal),
++      total: formatMoney(row.total)
++    }));
++  }
++
+   /**
+    * Obtiene el detalle de un pedido específico.
+    */

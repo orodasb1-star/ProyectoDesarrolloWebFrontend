@@ -1,0 +1,344 @@
+diff --git a/services/reports-service/src/controllers/reports.controller.js b/services/reports-service/src/controllers/reports.controller.js
+index e8ea4c7de1936f18b7d602e1cd036728990201c4..dca04124c4fff640ee158de00cb7974db56de755 100644
+--- a/services/reports-service/src/controllers/reports.controller.js
++++ b/services/reports-service/src/controllers/reports.controller.js
+@@ -55,6 +55,33 @@ class ReportsController {
+       next(err);
+     }
+   };
++
++  // Fábrica para los reportes que reciben filtro de fechas
++  conFiltros = (metodo) => async (req, res, next) => {
++    try {
++      const { fecha_inicio, fecha_fin } = req.query;
++      const data = await this.reportsService[metodo]({ fecha_inicio, fecha_fin });
++      res.status(200).json({ success: true, data });
++    } catch (err) {
++      next(err);
++    }
++  };
++
++  getValidacionesRechazadas = this.conFiltros('getValidacionesRechazadas');
++  getVisitas = this.conFiltros('getVisitas');
++  getVisitantes = this.conFiltros('getVisitantes');
++  getProductosMasVendidos = this.conFiltros('getProductosMasVendidos');
++  getSalud = this.conFiltros('getSalud');
++  getUsuariosNuevos = this.conFiltros('getUsuariosNuevos');
++
++  getNotificaciones = async (req, res, next) => {
++    try {
++      const data = await this.reportsService.getNotificaciones({ estado: req.query.estado });
++      res.status(200).json({ success: true, data });
++    } catch (err) {
++      next(err);
++    }
++  };
+ }
+ 
+ module.exports = ReportsController;
+diff --git a/services/reports-service/src/routes/reports.routes.js b/services/reports-service/src/routes/reports.routes.js
+index b0716e3de40123c67c89f2887d62540c5a83a301..7ccc77e102fd6399ea5a3abe4da5322bbee6d805 100644
+--- a/services/reports-service/src/routes/reports.routes.js
++++ b/services/reports-service/src/routes/reports.routes.js
+@@ -4,7 +4,7 @@ const {
+   authenticateJwt,
+   requireRole
+ } = require('@irtra/shared');
+-const { dateRangeFilterSchema } = require('../validators/reports.validator');
++const { dateRangeFilterSchema, notificacionesQuerySchema } = require('../validators/reports.validator');
+ 
+ /**
+  * Enrutador de reportes analíticos restringido exclusivamente a ADMINISTRADOR.
+@@ -38,6 +38,22 @@ function createReportsRouter(reportsController, redis) {
+     reportsController.getVentas
+   );
+ 
++  // 5 a 10. Reportes adicionales del documento de requisitos (todos aceptan fecha_inicio / fecha_fin)
++  const conFechas = validateRequest({ query: dateRangeFilterSchema });
++  router.get('/validaciones-rechazadas', conFechas, reportsController.getValidacionesRechazadas);
++  router.get('/visitas', conFechas, reportsController.getVisitas);
++  router.get('/visitantes', conFechas, reportsController.getVisitantes);
++  router.get('/productos-mas-vendidos', conFechas, reportsController.getProductosMasVendidos);
++  router.get('/salud', conFechas, reportsController.getSalud);
++  router.get('/usuarios', conFechas, reportsController.getUsuariosNuevos);
++
++  // 11. Notificaciones (por defecto las FALLIDAS)
++  router.get(
++    '/notificaciones',
++    validateRequest({ query: notificacionesQuerySchema }),
++    reportsController.getNotificaciones
++  );
++
+   return router;
+ }
+ 
+diff --git a/services/reports-service/src/services/reports.service.js b/services/reports-service/src/services/reports.service.js
+index 03e69480463d90ae2262ac8b8c145411eacae0ac..8932eeb4d815b9d46540f0b2eb4b34f2436a26a8 100644
+--- a/services/reports-service/src/services/reports.service.js
++++ b/services/reports-service/src/services/reports.service.js
+@@ -1,6 +1,24 @@
+ const { formatMoney, logger } = require('@irtra/shared');
+ const config = require('../config');
+ 
++/**
++ * Agrega a `condiciones` el filtro de rango de fechas sobre `columna` (fechas inclusivas, hora de Guatemala).
++ */
++function filtroFechas(columna, { fecha_inicio, fecha_fin }, condiciones, params) {
++  const col = `(${columna} AT TIME ZONE 'America/Guatemala')::date`;
++  if (fecha_inicio) {
++    params.push(fecha_inicio);
++    condiciones.push(`${col} >= $${params.length}::date`);
++  }
++  if (fecha_fin) {
++    params.push(fecha_fin);
++    condiciones.push(`${col} <= $${params.length}::date`);
++  }
++}
++
++const where = (condiciones) => (condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '');
++const claveFiltros = (f) => `${f.fecha_inicio || 'all'}:${f.fecha_fin || 'all'}`;
++
+ class ReportsService {
+   /**
+    * @param {import('pg').Pool} pool
+@@ -109,9 +127,29 @@ class ReportsService {
+         ORDER BY promedio_puntuacion DESC, p.id ASC;
+       `);
+ 
++      const distribucionRes = await this.pool.query(`
++        SELECT s.estrellas, COUNT(c.id)::int AS total
++        FROM generate_series(1, 5) AS s(estrellas)
++        LEFT JOIN calificaciones c ON c.puntuacion = s.estrellas
++        GROUP BY s.estrellas
++        ORDER BY s.estrellas DESC;
++      `);
++
++      const comentariosRes = await this.pool.query(`
++        SELECT c.id, c.puntuacion, c.comentario, c.created_at, p.nombre AS parque_nombre
++        FROM calificaciones c
++        INNER JOIN registros_visita rv ON rv.id = c.registro_visita_id
++        INNER JOIN parques p ON p.id = rv.parque_id
++        WHERE c.comentario IS NOT NULL AND c.comentario <> ''
++        ORDER BY c.created_at DESC
++        LIMIT 10;
++      `);
++
+       return {
+         promedio_global: Number(generalRes.rows[0].promedio_general),
+         total_calificaciones: generalRes.rows[0].total_calificaciones,
++        distribucion_estrellas: distribucionRes.rows,
++        comentarios_recientes: comentariosRes.rows,
+         por_parque: parquesRes.rows.map((row) => ({
+           ...row,
+           promedio_puntuacion: Number(row.promedio_puntuacion)
+@@ -224,6 +262,193 @@ class ReportsService {
+       };
+     });
+   }
++
++  /**
++   * 5. Validaciones rechazadas agrupadas por motivo.
++   */
++  async getValidacionesRechazadas(filtros = {}) {
++    return this.getCachedOrExecute(`reportes:rechazos:${claveFiltros(filtros)}`, async () => {
++      const condiciones = [`resultado = 'RECHAZADO'`];
++      const params = [];
++      filtroFechas('fecha_validacion', filtros, condiciones, params);
++      const res = await this.pool.query(
++        `SELECT
++           CASE
++             WHEN observacion ILIKE 'Pago pendiente%' THEN 'Pago pendiente'
++             WHEN observacion ILIKE '%ya utilizado%' THEN 'Código ya utilizado'
++             WHEN observacion ILIKE '%expirado%' THEN 'Código expirado'
++             WHEN observacion ILIKE 'Fecha inválida%' THEN 'Visita de otra fecha'
++             ELSE COALESCE(observacion, 'Sin motivo')
++           END AS motivo,
++           COUNT(*)::int AS total
++         FROM validaciones_qr
++         ${where(condiciones)}
++         GROUP BY 1
++         ORDER BY total DESC`,
++        params
++      );
++      return res.rows;
++    });
++  }
++
++  /**
++   * 6. Visitas: estados, nunca pagadas, con/sin vehículo y con/sin carnet (filtro por fecha de visita).
++   */
++  async getVisitas(filtros = {}) {
++    return this.getCachedOrExecute(`reportes:visitas:${claveFiltros(filtros)}`, async () => {
++      const condiciones = [];
++      const params = [];
++      if (filtros.fecha_inicio) { params.push(filtros.fecha_inicio); condiciones.push(`fecha_visita >= $${params.length}::date`); }
++      if (filtros.fecha_fin) { params.push(filtros.fecha_fin); condiciones.push(`fecha_visita <= $${params.length}::date`); }
++      const res = await this.pool.query(
++        `SELECT
++           COUNT(*)::int AS total_registros,
++           COUNT(*) FILTER (WHERE estado_registro = 'ACTIVO')::int AS activos,
++           COUNT(*) FILTER (WHERE estado_registro = 'CERRADO')::int AS cerrados,
++           COUNT(*) FILTER (WHERE estado_pago = 'PAGADO')::int AS pagados,
++           COUNT(*) FILTER (WHERE estado_pago = 'PENDIENTE')::int AS pendientes,
++           COUNT(*) FILTER (WHERE estado_pago = 'PENDIENTE' AND estado_registro = 'CERRADO')::int AS nunca_pagados,
++           COUNT(*) FILTER (WHERE tiene_vehiculo)::int AS con_vehiculo,
++           COUNT(*) FILTER (WHERE NOT tiene_vehiculo)::int AS sin_vehiculo,
++           COUNT(*) FILTER (WHERE tiene_carnet)::int AS con_carnet,
++           COUNT(*) FILTER (WHERE NOT tiene_carnet)::int AS sin_carnet
++         FROM registros_visita
++         ${where(condiciones)}`,
++        params
++      );
++      return res.rows;
++    });
++  }
++
++  /**
++   * 7. Visitantes por categoría de edad y parque (solo registros pagados).
++   */
++  async getVisitantes(filtros = {}) {
++    return this.getCachedOrExecute(`reportes:visitantes:${claveFiltros(filtros)}`, async () => {
++      const condiciones = [`rv.estado_pago = 'PAGADO'`];
++      const params = [];
++      if (filtros.fecha_inicio) { params.push(filtros.fecha_inicio); condiciones.push(`rv.fecha_visita >= $${params.length}::date`); }
++      if (filtros.fecha_fin) { params.push(filtros.fecha_fin); condiciones.push(`rv.fecha_visita <= $${params.length}::date`); }
++      const res = await this.pool.query(
++        `SELECT
++           p.nombre AS parque_nombre,
++           COUNT(*) FILTER (WHERE a.categoria_tarifa = 'NINO')::int AS ninos,
++           COUNT(*) FILTER (WHERE a.categoria_tarifa = 'ADULTO')::int AS adultos,
++           COUNT(*) FILTER (WHERE a.categoria_tarifa = 'ADULTO_MAYOR')::int AS adultos_mayores,
++           COUNT(*)::int AS total
++         FROM acompanantes a
++         INNER JOIN registros_visita rv ON rv.id = a.registro_visita_id
++         INNER JOIN parques p ON p.id = rv.parque_id
++         ${where(condiciones)}
++         GROUP BY p.id, p.nombre
++         ORDER BY total DESC`,
++        params
++      );
++      return res.rows;
++    });
++  }
++
++  /**
++   * 8. Brazaletes y tickets de juego más vendidos (pedidos pagados o entregados).
++   */
++  async getProductosMasVendidos(filtros = {}) {
++    return this.getCachedOrExecute(`reportes:productos:${claveFiltros(filtros)}`, async () => {
++      const condiciones = [`ped.estado IN ('PAGADO', 'ENTREGADO')`];
++      const params = [];
++      filtroFechas('ped.created_at', filtros, condiciones, params);
++      const res = await this.pool.query(
++        `SELECT
++           pr.nombre AS producto,
++           pr.tipo,
++           pk.nombre AS parque_nombre,
++           SUM(dp.cantidad)::int AS cantidad,
++           SUM(dp.subtotal) AS total
++         FROM detalle_pedido dp
++         INNER JOIN pedidos ped ON ped.id = dp.pedido_id
++         INNER JOIN parque_productos pp ON pp.id = dp.parque_producto_id
++         INNER JOIN productos pr ON pr.id = pp.producto_id
++         INNER JOIN parques pk ON pk.id = pp.parque_id
++         ${where(condiciones)}
++         GROUP BY pr.id, pr.nombre, pr.tipo, pk.id, pk.nombre
++         ORDER BY cantidad DESC
++         LIMIT 20`,
++        params
++      );
++      return res.rows.map((r) => ({ ...r, total: formatMoney(r.total) }));
++    });
++  }
++
++  /**
++   * 9. Salud de la app: pagos rechazados, QR expirados sin usar y tiempo entre pago y entrega.
++   */
++  async getSalud(filtros = {}) {
++    return this.getCachedOrExecute(`reportes:salud:${claveFiltros(filtros)}`, async () => {
++      const condPagos = [];
++      const params = [];
++      filtroFechas('created_at', filtros, condPagos, params);
++      const pagosRes = await this.pool.query(
++        `SELECT
++           COUNT(*) FILTER (WHERE estado = 'APROBADO')::int AS pagos_aprobados,
++           COUNT(*) FILTER (WHERE estado = 'RECHAZADO')::int AS pagos_rechazados
++         FROM pagos ${where(condPagos)}`,
++        params
++      );
++      const qrRes = await this.pool.query(
++        `SELECT COUNT(*) FILTER (WHERE estado = 'EXPIRADO')::int AS qr_expirados_sin_usar FROM codigos_qr`
++      );
++      const tiempoRes = await this.pool.query(
++        `SELECT ROUND(AVG(EXTRACT(EPOCH FROM (q.fecha_validacion - p.fecha_pago)) / 60)::numeric, 1) AS minutos_promedio_pago_a_entrega
++         FROM codigos_qr q
++         INNER JOIN pagos p ON p.estado = 'APROBADO'
++           AND (p.registro_visita_id = q.registro_visita_id OR p.pedido_id = q.pedido_id)
++         WHERE q.estado = 'ENTREGADO' AND q.fecha_validacion IS NOT NULL`
++      );
++      const minutos = tiempoRes.rows[0].minutos_promedio_pago_a_entrega;
++      return [{
++        ...pagosRes.rows[0],
++        ...qrRes.rows[0],
++        minutos_promedio_pago_a_entrega: minutos === null ? null : Number(minutos)
++      }];
++    });
++  }
++
++  /**
++   * 10. Usuarios nuevos (clientes) por día y cuántos tienen carnet.
++   */
++  async getUsuariosNuevos(filtros = {}) {
++    return this.getCachedOrExecute(`reportes:usuarios:${claveFiltros(filtros)}`, async () => {
++      const condiciones = [`rol = 'CLIENTE'`];
++      const params = [];
++      filtroFechas('created_at', filtros, condiciones, params);
++      const res = await this.pool.query(
++        `SELECT
++           to_char((created_at AT TIME ZONE 'America/Guatemala')::date, 'YYYY-MM-DD') AS fecha,
++           COUNT(*)::int AS nuevos,
++           COUNT(*) FILTER (WHERE carnet IS NOT NULL AND carnet <> '')::int AS con_carnet
++         FROM usuarios
++         ${where(condiciones)}
++         GROUP BY 1
++         ORDER BY 1 DESC`,
++        params
++      );
++      return res.rows;
++    });
++  }
++
++  /**
++   * 11. Notificaciones por estado (por defecto las fallidas). Sin caché: se revisan para reintentar.
++   */
++  async getNotificaciones({ estado = 'FALLIDO' } = {}) {
++    const res = await this.pool.query(
++      `SELECT id, usuario_id, registro_visita_id, pedido_id, tipo, destinatario, estado, fecha_envio, error, created_at
++       FROM notificaciones
++       WHERE estado = $1
++       ORDER BY created_at DESC
++       LIMIT 200`,
++      [estado]
++    );
++    return res.rows;
++  }
+ }
+ 
+ module.exports = ReportsService;
+diff --git a/services/reports-service/src/validators/reports.validator.js b/services/reports-service/src/validators/reports.validator.js
+index d06a2aea6edd204626e8f89c0ea07e741c8cfbaa..b26444fd6c52a9615294b041f43530153abf9515 100644
+--- a/services/reports-service/src/validators/reports.validator.js
++++ b/services/reports-service/src/validators/reports.validator.js
+@@ -5,6 +5,11 @@ const dateRangeFilterSchema = z.object({
+   fecha_fin: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'fecha_fin debe tener formato YYYY-MM-DD').optional()
+ });
+ 
++const notificacionesQuerySchema = z.object({
++  estado: z.enum(['PENDIENTE', 'ENVIADO', 'FALLIDO']).optional()
++});
++
+ module.exports = {
+-  dateRangeFilterSchema
++  dateRangeFilterSchema,
++  notificacionesQuerySchema
+ };

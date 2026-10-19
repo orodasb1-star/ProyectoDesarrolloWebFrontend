@@ -1,0 +1,198 @@
+diff --git a/services/qr-service/tests/concurrency-validation.test.js b/services/qr-service/tests/concurrency-validation.test.js
+index 7d4193f0a3a09309b4d652f80d2492c2f6819fbf..33d3f726c37c131181c9859beb7dc88803ac2991 100644
+--- a/services/qr-service/tests/concurrency-validation.test.js
++++ b/services/qr-service/tests/concurrency-validation.test.js
+@@ -1,101 +1,122 @@
+ const QrService = require('../src/services/qr.service');
+ const { ConflictError } = require('@irtra/shared');
+ 
+-describe('Test de Concurrencia - Validar y Entregar Código QR en Taquilla', () => {
+-  let mockPool;
+-  let qrService;
++/**
++ * Simula PostgreSQL con bloqueo de fila (SELECT ... FOR UPDATE) y transacciones reales:
++ * los INSERT de cada cliente solo llegan a la tabla si hay COMMIT; con ROLLBACK se descartan.
++ */
++function crearPoolSimulado(qrDatabase, validacionesTable, hoy) {
++  let isLocked = false;
+ 
+-  beforeEach(() => {
+-    // Simulación de base de datos en memoria para verificar comportamiento atómico
+-    const qrDatabase = {
+-      id: 99,
+-      codigo: '550e8400-e29b-41d4-a716-446655440000',
+-      estado: 'DISPONIBLE',
+-      registro_visita_id: null,
+-      pedido_id: 12
+-    };
++  return {
++    connect: async () => {
++      let pendientes = [];
++      let tengoBloqueo = false;
++      const liberar = () => {
++        if (tengoBloqueo) {
++          isLocked = false;
++          tengoBloqueo = false;
++        }
++      };
+ 
+-    const validacionesTable = [];
+-    let isLocked = false;
+-
+-    // Simulador de Pool y Cliente con bloqueo transaccional
+-    mockPool = {
+-      connect: async () => {
+-        return {
+-          query: async (sql, params) => {
+-            if (sql.includes('BEGIN')) return;
+-            if (sql.includes('COMMIT')) {
+-              isLocked = false;
+-              return;
+-            }
+-            if (sql.includes('ROLLBACK')) {
+-              isLocked = false;
+-              return;
+-            }
++      return {
++        query: async (sql, params) => {
++          if (sql.includes('BEGIN')) return { rows: [] };
++          if (sql.includes('COMMIT')) {
++            validacionesTable.push(...pendientes);
++            pendientes = [];
++            liberar();
++            return { rows: [] };
++          }
++          if (sql.includes('ROLLBACK')) {
++            pendientes = [];
++            liberar();
++            return { rows: [] };
++          }
+ 
+-            // Simulación de SELECT ... FOR UPDATE
+-            if (sql.includes('SELECT * FROM codigos_qr WHERE id = $1 FOR UPDATE')) {
+-              // Si ya está bloqueado, esperar liberación (emulación de espera de fila en PostgreSQL)
+-              while (isLocked) {
+-                await new Promise((resolve) => setTimeout(resolve, 10));
+-              }
+-              isLocked = true;
+-              return { rows: [{ ...qrDatabase }] };
++          if (sql.includes('FOR UPDATE')) {
++            while (isLocked) {
++              await new Promise((resolve) => setTimeout(resolve, 10));
+             }
++            isLocked = true;
++            tengoBloqueo = true;
++            return { rows: [{ ...qrDatabase }] };
++          }
+ 
+-            // Simulación de UPDATE
+-            if (sql.includes('UPDATE codigos_qr')) {
+-              qrDatabase.estado = 'ENTREGADO';
+-              return { rows: [{ ...qrDatabase }] };
+-            }
++          if (sql.includes('SELECT rv.fecha_visita')) {
++            return { rows: [{ fecha_visita: hoy }] };
++          }
+ 
+-            // Simulación de INSERT en validaciones_qr
+-            if (sql.includes('INSERT INTO validaciones_qr')) {
+-              validacionesTable.push({
+-                codigo_qr_id: params[0],
+-                empleado_id: params[1],
+-                resultado: params[2],
+-                observacion: params[3]
+-              });
+-              return { rows: [] };
+-            }
++          if (sql.includes('UPDATE codigos_qr')) {
++            qrDatabase.estado = 'ENTREGADO';
++            return { rows: [{ ...qrDatabase }] };
++          }
+ 
++          if (sql.includes('INSERT INTO validaciones_qr')) {
++            pendientes.push({
++              codigo_qr_id: params[0],
++              empleado_id: params[1],
++              resultado: sql.includes("'RECHAZADO'") ? 'RECHAZADO' : 'VALIDADO_ENTREGADO',
++              observacion: params[2] || null
++            });
+             return { rows: [] };
+-          },
+-          release: () => {
+-            isLocked = false;
+           }
+-        };
+-      },
+-      query: async (sql, params) => {
+-        return { rows: [] };
+-      }
+-    };
+ 
+-    qrService = new QrService(mockPool);
++          return { rows: [] };
++        },
++        release: liberar
++      };
++    },
++    query: async () => ({ rows: [] })
++  };
++}
++
++describe('Test de Concurrencia - Validar y Entregar Código QR en Taquilla', () => {
++  let qrService;
++  let qrDatabase;
++  let validacionesTable;
++
++  beforeEach(() => {
++    qrDatabase = {
++      id: 99,
++      codigo: '550e8400-e29b-41d4-a716-446655440000',
++      estado: 'DISPONIBLE',
++      registro_visita_id: null,
++      pedido_id: 12
++    };
++    validacionesTable = [];
++    qrService = new QrService(null);
++    const hoy = qrService.getTodayGuatemala();
++    qrService.pool = crearPoolSimulado(qrDatabase, validacionesTable, hoy);
++    // Evitar la llamada HTTP real a visits-service en la prueba
++    global.fetch = jest.fn().mockResolvedValue({ ok: true });
+   });
+ 
+   test('Dos solicitudes simultáneas sobre el mismo QR: solo UNA tiene éxito y la otra es rechazada', async () => {
+-    const qrId = 99;
+-    const empleadoId = 5;
+-
+-    // Lanzar dos peticiones concurrentes simultáneamente
+     const resultados = await Promise.allSettled([
+-      qrService.validarYEntregar(qrId, empleadoId),
+-      qrService.validarYEntregar(qrId, empleadoId)
++      qrService.validarYEntregar(99, 5),
++      qrService.validarYEntregar(99, 6)
+     ]);
+ 
+     const exitosas = resultados.filter((r) => r.status === 'fulfilled');
+     const rechazadas = resultados.filter((r) => r.status === 'rejected');
+ 
+-    // 1. Exactamente una debe tener éxito
+     expect(exitosas).toHaveLength(1);
+     expect(exitosas[0].value.success).toBe(true);
+     expect(exitosas[0].value.data.estado).toBe('ENTREGADO');
+ 
+-    // 2. Exactamente una debe ser rechazada por conflicto
+     expect(rechazadas).toHaveLength(1);
+     expect(rechazadas[0].reason).toBeInstanceOf(ConflictError);
+-    expect(rechazadas[0].reason.message).toContain('ya fue utilizado y entregado previamente');
++    expect(rechazadas[0].reason.message).toContain('ya utilizado');
++  });
++
++  test('El intento rechazado queda guardado en VALIDACIONES_QR (no se pierde por ROLLBACK)', async () => {
++    await Promise.allSettled([
++      qrService.validarYEntregar(99, 5),
++      qrService.validarYEntregar(99, 6)
++    ]);
++
++    const resultadosGuardados = validacionesTable.map((v) => v.resultado).sort();
++    expect(resultadosGuardados).toEqual(['RECHAZADO', 'VALIDADO_ENTREGADO']);
+   });
+ });

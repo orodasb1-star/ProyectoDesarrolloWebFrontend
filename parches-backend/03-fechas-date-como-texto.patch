@@ -1,0 +1,60 @@
+diff --git a/packages/shared/src/db.js b/packages/shared/src/db.js
+index 196e64c1c9466d00d6b8cee0c31047786c6bb8ad..2249881f958ded0443db9bc2d22f4d6685f4b4be 100644
+--- a/packages/shared/src/db.js
++++ b/packages/shared/src/db.js
+@@ -4,6 +4,11 @@ const logger = require('./logger');
+ // Asegurar que NUMERIC (OID 1700) se retorne como string para evitar pérdida de precisión con float de JS
+ types.setTypeParser(1700, (val) => val);
+ 
++// Asegurar que DATE (OID 1082) se retorne como string 'YYYY-MM-DD'.
++// Por defecto pg lo convierte a Date a medianoche local, lo que provoca comparaciones
++// incorrectas (Date < 'YYYY-MM-DD' siempre es false) y corrimientos de día según la zona horaria.
++types.setTypeParser(1082, (val) => val);
++
+ /**
+  * Crea una instancia de Pool de PostgreSQL para un microservicio.
+  * @param {object} customConfig Opciones de conexión
+diff --git a/services/qr-service/src/services/qr.service.js b/services/qr-service/src/services/qr.service.js
+index 71e9e540ac5515e37efee6385bc55896615f48e9..18ca80b6599ccdaf91f3690bb81beeaf1e86585c 100644
+--- a/services/qr-service/src/services/qr.service.js
++++ b/services/qr-service/src/services/qr.service.js
+@@ -56,7 +56,7 @@ class QrService {
+       );
+       if (regRes.rows[0]) {
+         // Expiración a las 23:59:59 del día de la visita en Guatemala (-06:00)
+-        fechaExpiracion = `${regRes.rows[0].fecha_visita.toISOString().split('T')[0]}T23:59:59-06:00`;
++        fechaExpiracion = `${regRes.rows[0].fecha_visita}T23:59:59-06:00`;
+       }
+     } else if (pedido_id) {
+       const pedRes = await this.pool.query(
+@@ -67,7 +67,7 @@ class QrService {
+         [pedido_id]
+       );
+       if (pedRes.rows[0]) {
+-        fechaExpiracion = `${pedRes.rows[0].fecha_visita.toISOString().split('T')[0]}T23:59:59-06:00`;
++        fechaExpiracion = `${pedRes.rows[0].fecha_visita}T23:59:59-06:00`;
+       }
+     }
+ 
+@@ -349,7 +349,7 @@ class QrService {
+         );
+         const registro = regRes.rows[0];
+         const hoy = this.getTodayGuatemala();
+-        const fechaVisitaStr = registro.fecha_visita.toISOString().split('T')[0];
++        const fechaVisitaStr = registro.fecha_visita;
+ 
+         if (fechaVisitaStr !== hoy) {
+           const motivo = `Fecha inválida: la visita está programada para ${fechaVisitaStr} y hoy es ${hoy}`;
+diff --git a/services/reports-service/src/services/reports.service.js b/services/reports-service/src/services/reports.service.js
+index dc8a761917fdff600a26ec4d4681635a75b3c869..03e69480463d90ae2262ac8b8c145411eacae0ac 100644
+--- a/services/reports-service/src/services/reports.service.js
++++ b/services/reports-service/src/services/reports.service.js
+@@ -215,7 +215,7 @@ class ReportsService {
+         ventas_por_parque_dia: result.rows.map((r) => ({
+           parque_id: r.parque_id,
+           parque_nombre: r.parque_nombre,
+-          fecha: r.fecha.toISOString().split('T')[0],
++          fecha: r.fecha,
+           total_entradas: formatMoney(r.total_entradas),
+           total_parqueo: formatMoney(r.total_parqueo),
+           total_pedidos: formatMoney(r.total_pedidos),

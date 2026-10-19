@@ -1,0 +1,56 @@
+diff --git a/README.md b/README.md
+index ea399052fb2cef476be80acf9e7e817d1b3b7bcb..57ff44cf7179ae3be430d5d635ae1b364e809a85 100644
+--- a/README.md
++++ b/README.md
+@@ -92,17 +92,12 @@ docker compose ps
+ ```
+ 
+ ### Paso 4: Ejecutar Migraciones SQL y Carga de Datos (Seed)
+-Aplica las 14 tablas en PostgreSQL y el seed con los 4 parques, productos, ofertas y usuarios de prueba:
++Aplica las 14 tablas, los permisos por servicio y el seed con los 4 parques, productos, ofertas y usuarios de prueba.
++Se ejecuta en un contenedor temporal (`db-migrate`) que monta la carpeta `database/`:
+ ```powershell
+-# 1. Instalar dependencias de base de datos dentro del contenedor
+-docker compose exec auth-service npm --prefix /app/database install
+-
+-# 2. Correr migraciones DDL de tablas y permisos
+-docker compose exec auth-service npm --prefix /app/database run migrate:up
+-
+-# 3. Poblar datos iniciales
+-docker compose exec auth-service npm --prefix /app/database run seed
++docker compose run --rm db-migrate
+ ```
++*Salida esperada:* `Migrations complete!` y la lista de usuarios de prueba. Se puede volver a ejecutar; ojo: el seed restablece los precios y usuarios de prueba a sus valores iniciales.
+ 
+ ---
+ 
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 1453191d2bd82fe99c0d2e12b18732a51f31ec1e..e88bbdb8ff70db8062d1f24cc126eecfce491370 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -345,6 +345,25 @@ services:
+       retries: 3
+       start_period: 15s
+ 
++  # ============================================================================
++  # 10.1 DB-MIGRATE (tarea de una sola vez: migraciones + seed)
++  # Uso: docker compose run --rm db-migrate
++  # ============================================================================
++  db-migrate:
++    image: node:20-alpine
++    profiles: ["tools"]
++    working_dir: /db
++    volumes:
++      - ./database:/db
++    environment:
++      DATABASE_URL: postgres://irtra_admin:irtra_admin_secure_password_2026@postgres:5432/irtra_db
++    command: sh -c "npm install --no-audit --no-fund && npx node-pg-migrate up && node scripts/seed.js"
++    networks:
++      - irtra_net
++    depends_on:
++      postgres:
++        condition: service_healthy
++
+   # ============================================================================
+   # 11. API-GATEWAY (NGINX - Único punto de entrada al host)
+   # ============================================================================

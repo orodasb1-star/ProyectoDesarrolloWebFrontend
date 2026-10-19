@@ -1,0 +1,29 @@
+diff --git a/database/migrations/1710000000002_permisos_faltantes.js b/database/migrations/1710000000002_permisos_faltantes.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..43da82deac578bf26b2e6b9f85476b22c650dd4d
+--- /dev/null
++++ b/database/migrations/1710000000002_permisos_faltantes.js
+@@ -0,0 +1,23 @@
++/**
++ * Corrige permisos que faltaban en 1710000000001_permisos_roles.js.
++ * Sin ellos los servicios fallan con "permission denied for table ...":
++ *  - visits-service: cotizar/crear registro (JOIN productos) y calificar (lee codigos_qr)
++ *  - qr-service: escanear un QR (JOIN parques, acompanantes, detalle_pedido, parque_productos, productos)
++ *  - notifications-service: correo de QR entregado (lee codigos_qr)
++ */
++
++exports.up = async (pgm) => {
++  pgm.sql(`
++    GRANT SELECT ON productos, codigos_qr TO visits_user;
++    GRANT SELECT ON parques, acompanantes, detalle_pedido, parque_productos, productos TO qr_user;
++    GRANT SELECT ON codigos_qr TO notifications_user;
++  `);
++};
++
++exports.down = async (pgm) => {
++  pgm.sql(`
++    REVOKE SELECT ON productos, codigos_qr FROM visits_user;
++    REVOKE SELECT ON parques, acompanantes, detalle_pedido, parque_productos, productos FROM qr_user;
++    REVOKE SELECT ON codigos_qr FROM notifications_user;
++  `);
++};

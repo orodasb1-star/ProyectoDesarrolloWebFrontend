@@ -1,0 +1,50 @@
+PARCHES DEL BACKEND - IRTRA EN LINEA
+
+Aplicar en orden, uno por commit, desde la carpeta raiz del repositorio
+(donde esta docker-compose.yml), con Git Bash, CMD o PowerShell.
+
+Por cada parche:
+  git apply --3way --whitespace=nowarn ruta\al\NN-nombre.patch
+  git add -A
+  git commit -m "MENSAJE"
+
+Parches y mensaje de commit sugerido:
+
+01-permisos-faltantes-bd.patch
+  git commit -m "fix(db): conceder permisos SELECT faltantes a visits, qr y notifications"
+
+02-servicio-db-migrate.patch
+  git commit -m "fix(docker): servicio db-migrate para correr migraciones y seed"
+
+03-fechas-date-como-texto.patch
+  git commit -m "fix: leer columnas DATE como texto YYYY-MM-DD (validación de visita expirada en pedidos)"
+
+04-escanear-validado-por.patch
+  git commit -m "feat(qr): escanear informa qué empleado validó un QR ya entregado"
+
+05-admin-usuarios.patch
+  git commit -m "feat(auth): listar usuarios y activar/desactivar cuentas (ADMINISTRADOR)"
+
+06-mis-validaciones.patch
+  git commit -m "feat(qr): endpoint mis-validaciones para el historial del día del empleado"
+
+07-reportes-adicionales.patch
+  git commit -m "feat(reportes): rechazos, visitas, visitantes, productos más vendidos, salud, usuarios y notificaciones"
+
+08-catalogo-admin.patch
+  git commit -m "feat(catalogo): listar productos y todos los parques (incluye inactivos) para el administrador"
+
+09-mis-pedidos.patch
+  git commit -m "feat(visitas): listar todos los pedidos del cliente"
+
+10-validacion-guarda-rechazos.patch
+  git commit -m "fix(qr): guardar intentos rechazados y validar fecha de visita en QR de pedidos"
+
+11-prueba-concurrencia.patch
+  git commit -m "test(qr): corregir prueba de concurrencia y verificar que se guardan los rechazos"
+
+Despues de aplicar todos:
+  docker compose up -d --build
+  docker compose run --rm db-migrate
+  docker compose exec qr-service npm test
+  docker compose exec visits-service npm test

@@ -1,0 +1,168 @@
+diff --git a/services/qr-service/src/services/qr.service.js b/services/qr-service/src/services/qr.service.js
+index 69862399ae4b6c7b4709222ef25fda5508a87685..ba3910fb0b92e62776f22dbf42f7967077e36d2a 100644
+--- a/services/qr-service/src/services/qr.service.js
++++ b/services/qr-service/src/services/qr.service.js
+@@ -307,6 +307,7 @@ class QrService {
+         fecha_validacion: qr.fecha_validacion,
+         validado_por: validadoPor,
+         numero_pedido: pedido.numero_pedido,
++        fecha_visita: pedido.fecha_visita,
+         estado_pedido: pedido.estado,
+         parque: pedido.parque_nombre,
+         titular: {
+@@ -323,12 +324,24 @@ class QrService {
+ 
+   /**
+    * EMPLEADO: Valida y entrega atómicamente el QR con SELECT ... FOR UPDATE y auditoría en VALIDACIONES_QR.
++   *
++   * Los intentos RECHAZADOS se guardan y se confirma la transacción ANTES de responder con error;
++   * si el error se lanzara dentro de withTransaction, el ROLLBACK borraría el registro del rechazo.
+    * @param {number} qrId
+    * @param {number} empleadoId
+    */
+   async validarYEntregar(qrId, empleadoId) {
+-    return withTransaction(this.pool, async (client) => {
+-      // 1. Bloqueo pesimista de fila FOR UPDATE
++    const resultado = await withTransaction(this.pool, async (client) => {
++      const rechazar = async (motivo, ErrorClass) => {
++        await client.query(
++          `INSERT INTO validaciones_qr (codigo_qr_id, empleado_id, resultado, observacion, fecha_validacion)
++           VALUES ($1, $2, 'RECHAZADO', $3, now())`,
++          [qrId, empleadoId, motivo]
++        );
++        return { rechazo: new ErrorClass(motivo) };
++      };
++
++      // 1. Bloqueo pesimista de fila FOR UPDATE (un segundo empleado espera aquí)
+       const qrRes = await client.query(
+         `SELECT * FROM codigos_qr WHERE id = $1 FOR UPDATE`,
+         [qrId]
+@@ -349,39 +362,25 @@ class QrService {
+         } else if (qr.estado === 'EXPIRADO') {
+           motivo = 'Código QR expirado: la fecha de validez ha vencido';
+         }
+-
+-        // Registrar intento fallido
+-        await client.query(
+-          `INSERT INTO validaciones_qr (codigo_qr_id, empleado_id, resultado, observacion, fecha_validacion)
+-           VALUES ($1, $2, 'RECHAZADO', $3, now())`,
+-          [qrId, empleadoId, motivo]
+-        );
+-
+-        throw new ConflictError(motivo);
++        return rechazar(motivo, ConflictError);
+       }
+ 
+-      // 3. Si es registro de visita, validar que la fecha de visita sea HOY en Guatemala
+-      let pedidoIdParaNotificar = null;
+-      if (qr.registro_visita_id) {
+-        const regRes = await client.query(
+-          `SELECT fecha_visita FROM registros_visita WHERE id = $1`,
+-          [qr.registro_visita_id]
++      // 3. La visita (del registro o del pedido) debe ser HOY en Guatemala
++      const fechaRes = await client.query(
++        `SELECT rv.fecha_visita
++         FROM registros_visita rv
++         LEFT JOIN pedidos p ON p.registro_visita_id = rv.id
++         WHERE rv.id = $1 OR p.id = $2
++         LIMIT 1`,
++        [qr.registro_visita_id, qr.pedido_id]
++      );
++      const fechaVisita = fechaRes.rows[0]?.fecha_visita;
++      const hoy = this.getTodayGuatemala();
++      if (fechaVisita !== hoy) {
++        return rechazar(
++          `Fecha inválida: la visita está programada para ${fechaVisita} y hoy es ${hoy}`,
++          BadRequestError
+         );
+-        const registro = regRes.rows[0];
+-        const hoy = this.getTodayGuatemala();
+-        const fechaVisitaStr = registro.fecha_visita;
+-
+-        if (fechaVisitaStr !== hoy) {
+-          const motivo = `Fecha inválida: la visita está programada para ${fechaVisitaStr} y hoy es ${hoy}`;
+-          await client.query(
+-            `INSERT INTO validaciones_qr (codigo_qr_id, empleado_id, resultado, observacion, fecha_validacion)
+-             VALUES ($1, $2, 'RECHAZADO', $3, now())`,
+-            [qrId, empleadoId, motivo]
+-          );
+-          throw new BadRequestError(motivo);
+-        }
+-      } else if (qr.pedido_id) {
+-        pedidoIdParaNotificar = qr.pedido_id;
+       }
+ 
+       // 4. Marcar como ENTREGADO
+@@ -400,38 +399,44 @@ class QrService {
+         [qrId, empleadoId]
+       );
+ 
+-      // 6. Si es pedido, sincronizar estado ENTREGADO en visits-service
+-      if (pedidoIdParaNotificar) {
+-        try {
+-          await fetch(`${config.services.visitsUrl}/internal/pedidos/${pedidoIdParaNotificar}/marcar-entregado`, {
+-            method: 'POST',
+-            headers: {
+-              'Content-Type': 'application/json',
+-              'x-internal-service-token': config.internalToken
+-            }
+-          });
+-        } catch (syncErr) {
+-          logger.error({ syncErr, pedidoId: pedidoIdParaNotificar }, 'Error al sincronizar estado de pedido con visits-service');
+-        }
+-      }
++      return { ok: updateRes.rows[0], pedidoId: qr.pedido_id };
++    });
++
++    if (resultado.rechazo) {
++      throw resultado.rechazo;
++    }
+ 
+-      // 7. Encolar notificación en BullMQ (efecto secundario asíncrono)
+-      if (this.notificationsQueue) {
+-        this.notificationsQueue.add('qr-entregado', {
+-          codigo_qr_id: qrId,
+-          empleado_id: empleadoId,
+-          fecha_validacion: new Date().toISOString()
+-        }).catch((queueErr) => {
+-          logger.error({ queueErr }, 'Error al encolar evento de validación en BullMQ');
++    // 6. Si es pedido, sincronizar estado ENTREGADO en visits-service (ya confirmada la transacción)
++    if (resultado.pedidoId) {
++      try {
++        await fetch(`${config.services.visitsUrl}/internal/pedidos/${resultado.pedidoId}/marcar-entregado`, {
++          method: 'POST',
++          headers: {
++            'Content-Type': 'application/json',
++            'x-internal-service-token': config.internalToken
++          }
+         });
++      } catch (syncErr) {
++        logger.error({ syncErr, pedidoId: resultado.pedidoId }, 'Error al sincronizar estado de pedido con visits-service');
+       }
++    }
+ 
+-      return {
+-        success: true,
+-        message: 'Código QR validado y entregado exitosamente',
+-        data: updateRes.rows[0]
+-      };
+-    });
++    // 7. Encolar notificación en BullMQ (efecto secundario asíncrono)
++    if (this.notificationsQueue) {
++      this.notificationsQueue.add('qr-entregado', {
++        codigo_qr_id: qrId,
++        empleado_id: empleadoId,
++        fecha_validacion: new Date().toISOString()
++      }).catch((queueErr) => {
++        logger.error({ queueErr }, 'Error al encolar evento de validación en BullMQ');
++      });
++    }
++
++    return {
++      success: true,
++      message: 'Código QR validado y entregado exitosamente',
++      data: resultado.ok
++    };
+   }
+ 
+   /**

@@ -1,0 +1,26 @@
+{
+  "name": "irtra-en-linea-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Frontend React para IRTRA en Línea (Xocomil, Xetulul, Xejuyup, Xetulhá)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@fontsource-variable/bricolage-grotesque": "^5.1.1",
+    "@fontsource/figtree": "^5.1.1",
+    "html5-qrcode": "2.3.8",
+    "lucide-react": "0.475.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "6.30.0",
+    "recharts": "2.15.3"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "4.4.1",
+    "vite": "6.3.5"
+  }
+}

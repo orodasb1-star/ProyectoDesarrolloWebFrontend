@@ -1,0 +1,94 @@
+diff --git a/services/catalog-service/src/controllers/catalog.controller.js b/services/catalog-service/src/controllers/catalog.controller.js
+index 2b8c48530bafd0dbae045cea9f8fca66591745ca..d4566dbe6ec007a17366d533ea2ccb57005b62d1 100644
+--- a/services/catalog-service/src/controllers/catalog.controller.js
++++ b/services/catalog-service/src/controllers/catalog.controller.js
+@@ -32,6 +32,24 @@ class CatalogController {
+     }
+   };
+ 
++  getTodosLosParques = async (req, res, next) => {
++    try {
++      const parques = await this.catalogService.getTodosLosParques();
++      res.status(200).json({ success: true, data: parques });
++    } catch (err) {
++      next(err);
++    }
++  };
++
++  getProductos = async (req, res, next) => {
++    try {
++      const productos = await this.catalogService.getProductos();
++      res.status(200).json({ success: true, data: productos });
++    } catch (err) {
++      next(err);
++    }
++  };
++
+   createParque = async (req, res, next) => {
+     try {
+       const nuevoParque = await this.catalogService.createParque(req.body);
+diff --git a/services/catalog-service/src/routes/catalog.routes.js b/services/catalog-service/src/routes/catalog.routes.js
+index c410330ee03d466897bca022fe13b1e79c779bcf..f8237f493884b3f249119ed9c0d464fb08f77ed2 100644
+--- a/services/catalog-service/src/routes/catalog.routes.js
++++ b/services/catalog-service/src/routes/catalog.routes.js
+@@ -38,6 +38,22 @@ function createCatalogRouter(catalogController, redis) {
+ 
+   // --- RUTAS DE ADMINISTRACIÓN (Protegidas con JWT y rol ADMINISTRADOR) ---
+ 
++  // Listar TODOS los parques, incluidos los inactivos (para poder reactivarlos)
++  router.get(
++    '/admin/parques',
++    authenticateJwt(redis),
++    requireRole('ADMINISTRADOR'),
++    catalogController.getTodosLosParques
++  );
++
++  // Listar el catálogo global de productos (activos e inactivos)
++  router.get(
++    '/productos',
++    authenticateJwt(redis),
++    requireRole('ADMINISTRADOR'),
++    catalogController.getProductos
++  );
++
+   // Crear un nuevo parque
+   router.post(
+     '/parques',
+diff --git a/services/catalog-service/src/services/catalog.service.js b/services/catalog-service/src/services/catalog.service.js
+index 2ba7661a086df2d1225d46e5c2019ec465e3b388..444440ea4835c889d793f7e73e768aa664998b68 100644
+--- a/services/catalog-service/src/services/catalog.service.js
++++ b/services/catalog-service/src/services/catalog.service.js
+@@ -77,6 +77,33 @@ class CatalogService {
+     return parques;
+   }
+ 
++  /**
++   * ADMINISTRADOR: todos los parques, activos e inactivos (sin caché).
++   */
++  async getTodosLosParques() {
++    const result = await this.pool.query(
++      `SELECT id, nombre, codigo, descripcion, max_personas_carnet, activo, created_at, updated_at
++       FROM parques
++       ORDER BY activo DESC, id ASC`
++    );
++    return result.rows;
++  }
++
++  /**
++   * ADMINISTRADOR: catálogo global de productos con cuántas ofertas en línea tiene cada uno.
++   */
++  async getProductos() {
++    const result = await this.pool.query(
++      `SELECT p.id, p.nombre, p.codigo, p.descripcion, p.tipo, p.activo, p.created_at, p.updated_at,
++              COUNT(pp.id) FILTER (WHERE pp.disponible_online)::int AS ofertas_en_linea
++       FROM productos p
++       LEFT JOIN parque_productos pp ON pp.producto_id = p.id
++       GROUP BY p.id
++       ORDER BY p.activo DESC, p.id ASC`
++    );
++    return result.rows;
++  }
++
+   /**
+    * Obtiene los datos de un parque por su ID.
+    * @param {number} id

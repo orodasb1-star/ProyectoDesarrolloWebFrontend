@@ -1,0 +1,174 @@
+diff --git a/services/auth-service/src/controllers/auth.controller.js b/services/auth-service/src/controllers/auth.controller.js
+index f9d0545cc300b28ee41637abc5c5e17f23c02f90..ec52668bccf866f25050554653ed313b57654abd 100644
+--- a/services/auth-service/src/controllers/auth.controller.js
++++ b/services/auth-service/src/controllers/auth.controller.js
+@@ -77,6 +77,31 @@ class AuthController {
+     }
+   };
+ 
++  listUsuarios = async (req, res, next) => {
++    try {
++      const usuarios = await this.userService.listUsuarios(req.query);
++      res.status(200).json({
++        success: true,
++        data: usuarios
++      });
++    } catch (err) {
++      next(err);
++    }
++  };
++
++  updateEstadoUsuario = async (req, res, next) => {
++    try {
++      const usuario = await this.userService.setActivo(req.params.id, req.body.activo, req.user.id);
++      res.status(200).json({
++        success: true,
++        message: usuario.activo ? 'Cuenta activada' : 'Cuenta desactivada',
++        data: usuario
++      });
++    } catch (err) {
++      next(err);
++    }
++  };
++
+   getInternalUser = async (req, res, next) => {
+     try {
+       const { id } = req.params;
+diff --git a/services/auth-service/src/routes/auth.routes.js b/services/auth-service/src/routes/auth.routes.js
+index 1a70938a3f45a826194f99a868745e02617bbd3e..1bde5e8de25ed203e9a13088d474d015dc05c6a5 100644
+--- a/services/auth-service/src/routes/auth.routes.js
++++ b/services/auth-service/src/routes/auth.routes.js
+@@ -8,7 +8,10 @@ const {
+   registerClienteSchema,
+   oauthTokenSchema,
+   revokeTokenSchema,
+-  createEmpleadoSchema
++  createEmpleadoSchema,
++  listUsuariosQuerySchema,
++  usuarioIdParamSchema,
++  updateEstadoUsuarioSchema
+ } = require('../validators/auth.validator');
+ 
+ /**
+@@ -56,6 +59,24 @@ function createAuthRouter(authController, redis) {
+     authController.createEmpleado
+   );
+ 
++  // Listado de usuarios (exclusivo para ADMINISTRADOR)
++  router.get(
++    '/admin/usuarios',
++    authenticateJwt(redis),
++    requireRole('ADMINISTRADOR'),
++    validateRequest({ query: listUsuariosQuerySchema }),
++    authController.listUsuarios
++  );
++
++  // Activar / desactivar una cuenta (exclusivo para ADMINISTRADOR)
++  router.patch(
++    '/admin/usuarios/:id',
++    authenticateJwt(redis),
++    requireRole('ADMINISTRADOR'),
++    validateRequest({ params: usuarioIdParamSchema, body: updateEstadoUsuarioSchema }),
++    authController.updateEstadoUsuario
++  );
++
+   return router;
+ }
+ 
+diff --git a/services/auth-service/src/services/user.service.js b/services/auth-service/src/services/user.service.js
+index b5896e202b70e0793d7ceb3c16362bbcb0b399b5..f242cb38e11072545245de5e39e1d0b05b13723d 100644
+--- a/services/auth-service/src/services/user.service.js
++++ b/services/auth-service/src/services/user.service.js
+@@ -1,5 +1,5 @@
+ const bcrypt = require('bcryptjs');
+-const { ConflictError, NotFoundError } = require('@irtra/shared');
++const { ConflictError, NotFoundError, BadRequestError } = require('@irtra/shared');
+ 
+ const BCRYPT_SALT_ROUNDS = 12;
+ 
+@@ -66,6 +66,57 @@ class UserService {
+     return result.rows[0];
+   }
+ 
++  /**
++   * Lista usuarios (ADMINISTRADOR), opcionalmente filtrados por rol y estado.
++   * @param {{ rol?: string, activo?: 'true'|'false' }} filtros
++   */
++  async listUsuarios({ rol, activo } = {}) {
++    const condiciones = [];
++    const params = [];
++    if (rol) {
++      params.push(rol);
++      condiciones.push(`rol = $${params.length}`);
++    }
++    if (activo) {
++      params.push(activo === 'true');
++      condiciones.push(`activo = $${params.length}`);
++    }
++    const where = condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '';
++    const result = await this.pool.query(
++      `SELECT id, rol, nombres, apellidos, edad, email, telefono, carnet, activo, created_at, updated_at
++       FROM usuarios
++       ${where}
++       ORDER BY created_at DESC, id DESC`,
++      params
++    );
++    return result.rows;
++  }
++
++  /**
++   * Activa o desactiva una cuenta (ADMINISTRADOR). No se borra nada para conservar el historial.
++   * Un usuario desactivado ya no puede iniciar sesión ni renovar su refresh token.
++   * @param {number} id
++   * @param {boolean} activo
++   * @param {number} adminId ID del administrador que hace el cambio
++   */
++  async setActivo(id, activo, adminId) {
++    if (Number(id) === Number(adminId) && !activo) {
++      throw new BadRequestError('No puede desactivar su propia cuenta de administrador');
++    }
++    const usuario = await this.findById(id);
++    if (usuario.rol === 'ADMINISTRADOR' && !activo) {
++      throw new BadRequestError('Las cuentas de administrador no se pueden desactivar desde la aplicación');
++    }
++    const result = await this.pool.query(
++      `UPDATE usuarios
++       SET activo = $1, updated_at = now()
++       WHERE id = $2
++       RETURNING id, rol, nombres, apellidos, edad, email, telefono, carnet, activo, created_at, updated_at`,
++      [activo, id]
++    );
++    return result.rows[0];
++  }
++
+   /**
+    * Registra un nuevo EMPLEADO (solo llamado por administradores).
+    * @param {object} userData
+diff --git a/services/auth-service/src/validators/auth.validator.js b/services/auth-service/src/validators/auth.validator.js
+index 2d43a1fc4337100b3281f6ab3f1bf0d1e359a6f4..4dbf2773c90adb28af89c85e73c824d3c59bc2fd 100644
+--- a/services/auth-service/src/validators/auth.validator.js
++++ b/services/auth-service/src/validators/auth.validator.js
+@@ -47,7 +47,23 @@ const createEmpleadoSchema = z.object({
+   telefono: z.string().trim().max(30).optional().nullable()
+ });
+ 
++const listUsuariosQuerySchema = z.object({
++  rol: z.enum(['CLIENTE', 'EMPLEADO', 'ADMINISTRADOR']).optional(),
++  activo: z.enum(['true', 'false']).optional()
++});
++
++const usuarioIdParamSchema = z.object({
++  id: z.coerce.number().int().positive('El ID del usuario debe ser un entero positivo')
++});
++
++const updateEstadoUsuarioSchema = z.object({
++  activo: z.boolean({ required_error: 'El campo activo (true/false) es requerido' })
++});
++
+ module.exports = {
++  listUsuariosQuerySchema,
++  usuarioIdParamSchema,
++  updateEstadoUsuarioSchema,
+   registerClienteSchema,
+   oauthTokenSchema,
+   revokeTokenSchema,
