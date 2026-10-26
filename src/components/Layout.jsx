@@ -2,6 +2,7 @@ import {
   BarChart3,
   Bell,
   ClipboardList,
+  History,
   LogOut,
   MapPinned,
   Package,
@@ -20,7 +21,8 @@ const MENUS = {
   CLIENTE: [
     { to: '/cliente', texto: 'Mis visitas', icono: Ticket, end: true },
     { to: '/cliente/visitas/nueva', texto: 'Nueva visita', icono: PlusCircle },
-    { to: '/cliente/pedidos', texto: 'Mis pedidos', icono: ReceiptText }
+    { to: '/cliente/pedidos', texto: 'Mis pedidos', icono: ReceiptText },
+    { to: '/cliente/historial', texto: 'Mi historial', icono: History }
   ],
   EMPLEADO: [
     { to: '/empleado', texto: 'Escanear', icono: QrCode, end: true },

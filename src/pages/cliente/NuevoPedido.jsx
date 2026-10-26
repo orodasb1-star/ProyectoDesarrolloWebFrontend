@@ -26,14 +26,52 @@ export default function NuevoPedido() {
   const productos = (catalogo.data || []).filter((p) => p.tipo === 'BRAZALETE' || p.tipo === 'TICKET_JUEGO');
 
   const [cantidades, setCantidades] = useState({});
+  const [cotizacion, setCotizacion] = useState(null);
+  const [cotizando, setCotizando] = useState(false);
+  const [errorCot, setErrorCot] = useState(null);
   const [creando, setCreando] = useState(false);
   const [errorCrear, setErrorCrear] = useState(null);
-  useEffect(() => setCantidades({}), [registroId]);
+
+  useEffect(() => {
+    setCantidades({});
+    setCotizacion(null);
+  }, [registroId]);
 
   const items = Object.entries(cantidades)
     .filter(([, c]) => c > 0)
     .map(([id, c]) => ({ parque_producto_id: Number(id), cantidad: c }));
   const pagado = registro?.estado_pago === 'PAGADO';
+
+  // Cotización en vivo del pedido calculada por el backend
+  useEffect(() => {
+    if (!registro || items.length === 0) {
+      setCotizacion(null);
+      return;
+    }
+    let cancel = false;
+    setCotizando(true);
+    const t = setTimeout(async () => {
+      try {
+        const c = await visitasApi.cotizarPedido(registro.id, items);
+        if (!cancel) {
+          setCotizacion(c);
+          setErrorCot(null);
+        }
+      } catch (err) {
+        if (!cancel) {
+          setCotizacion(null);
+          setErrorCot(err);
+        }
+      } finally {
+        if (!cancel) setCotizando(false);
+      }
+    }, 200);
+
+    return () => {
+      cancel = true;
+      clearTimeout(t);
+    };
+  }, [registro?.id, JSON.stringify(items)]);
 
   function cambiar(id, delta) {
     setCantidades((c) => ({ ...c, [id]: Math.max(0, Math.min(50, (c[id] || 0) + delta)) }));
@@ -127,18 +165,28 @@ export default function NuevoPedido() {
             ) : (
               <table className="resumen__tabla">
                 <tbody>
-                  {items.map((it) => {
+                  {(cotizacion?.items || items).map((it) => {
                     const p = productos.find((x) => x.parque_producto_id === it.parque_producto_id);
                     return (
                       <tr key={it.parque_producto_id}>
-                        <td>{p?.nombre}<small> × {it.cantidad} a {money(p?.precio)}</small></td>
+                        <td>
+                          {it.producto_nombre || p?.nombre}
+                          <small> × {it.cantidad} a {money(it.precio_unitario || p?.precio)}</small>
+                        </td>
+                        <td>{it.subtotal ? money(it.subtotal) : '…'}</td>
                       </tr>
                     );
                   })}
                 </tbody>
+                {cotizacion?.total && (
+                  <tfoot>
+                    <tr><td>Total oficial</td><td>{money(cotizacion.total)}</td></tr>
+                  </tfoot>
+                )}
               </table>
             )}
-            <p className="texto-suave resumen__nota">El total oficial lo calcula el sistema al crear el pedido y lo verás antes de confirmar el pago.</p>
+            {cotizando && <p className="texto-suave resumen__nota">Calculando cotización oficial en el servidor…</p>}
+            <ErrorApi error={errorCot} titulo="Error al cotizar pedido" />
 
             {!pagado && (
               <Alerta tipo="aviso" titulo="Primero paga tu entrada">
@@ -147,9 +195,9 @@ export default function NuevoPedido() {
               </Alerta>
             )}
             <ErrorApi error={errorCrear} titulo="No se pudo crear el pedido" />
-            <Boton className="btn--bloque btn--grande" onClick={crear} cargando={creando} disabled={!pagado || items.length === 0}
+            <Boton className="btn--bloque btn--grande" onClick={crear} cargando={creando} disabled={!pagado || items.length === 0 || cotizando}
               title={!pagado ? 'Primero paga tu entrada' : undefined}>
-              {!pagado && <Lock size={18} />} Pagar
+              {!pagado && <Lock size={18} />} Ir a pagar pedido
             </Boton>
           </aside>
         </div>

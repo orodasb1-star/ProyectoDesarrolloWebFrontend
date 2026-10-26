@@ -5,7 +5,6 @@ import { qrApi } from '../../api/endpoints';
 import { Boton, ErrorApi, Loader, MarcaParque } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
 import { CATEGORIA_LABEL, TIPO_PRODUCTO_LABEL, fechaHora, fechaLarga, hoyGuatemala, soloFecha } from '../../utils/format';
-import { guardarValidacion } from '../../utils/validacionesLocales';
 import { useAsync } from '../../utils/useAsync';
 
 /** Decide qué mostrar según el estado del QR y la fecha de la visita. */
@@ -68,25 +67,9 @@ export default function DetalleQR() {
     try {
       const r = await qrApi.validarEntregar(data.codigo_qr_id);
       setEntregado(r.data);
-      guardarValidacion(usuario?.id, {
-        codigo_qr_id: data.codigo_qr_id,
-        tipo: data.tipo,
-        parque: data.parque,
-        titular: `${data.titular.nombres} ${data.titular.apellidos}`,
-        referencia: esRegistro ? `${data.total_personas} personas` : data.numero_pedido,
-        resultado: 'VALIDADO_ENTREGADO'
-      });
     } catch (err) {
       setErrorValidar(err);
-      guardarValidacion(usuario?.id, {
-        codigo_qr_id: data.codigo_qr_id,
-        tipo: data.tipo,
-        parque: data.parque,
-        titular: `${data.titular.nombres} ${data.titular.apellidos}`,
-        referencia: err.message,
-        resultado: 'RECHAZADO'
-      });
-      // Otro empleado pudo validarlo al mismo tiempo: refrescamos el estado real.
+      // El backend registra atómicamente el rechazo en validaciones_qr para auditoría
       reload();
     } finally {
       setValidando(false);
@@ -155,12 +138,23 @@ export default function DetalleQR() {
         )}
       </section>
 
-      <ErrorApi error={errorValidar} titulo="No se validó" />
+      <ErrorApi error={errorValidar} titulo="Resultado de la validación en el servidor" />
 
       {!entregado && (
-        <Boton className="btn--bloque btn--grande btn--validar" onClick={validar} cargando={validando}
-          disabled={evaluacion.tipo !== 'ok'}>
-          <PackageCheck size={22} /> Validar y entregar
+        <Boton
+          className={`btn--bloque btn--grande ${evaluacion.tipo === 'ok' ? 'btn--validar' : 'btn--secundario'}`}
+          onClick={validar}
+          cargando={validando}
+          disabled={evaluacion.tipo === 'usado' || evaluacion.tipo === 'pendiente'}
+        >
+          <PackageCheck size={22} />
+          {evaluacion.tipo === 'ok'
+            ? 'Validar y entregar'
+            : evaluacion.tipo === 'usado'
+            ? 'Código ya utilizado'
+            : evaluacion.tipo === 'pendiente'
+            ? 'Pago pendiente (no entregar)'
+            : 'Procesar validación en servidor'}
         </Boton>
       )}
       <Link to="/empleado" className={`btn btn--bloque ${entregado ? 'btn--primario btn--grande' : 'btn--fantasma'}`}>

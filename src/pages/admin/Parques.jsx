@@ -5,24 +5,6 @@ import { Alerta, Boton, Campo, Encabezado, ErrorApi, Loader } from '../../compon
 import { temaParque } from '../../utils/parques';
 import { useAsync } from '../../utils/useAsync';
 
-// GET /catalogo/parques solo devuelve activos. Para poder reactivar un parque
-// recordamos en este navegador los que el administrador desactivó.
-const CLAVE_INACTIVOS = 'irtra.parquesInactivos';
-const leerInactivos = () => {
-  try {
-    return JSON.parse(localStorage.getItem(CLAVE_INACTIVOS) || '[]');
-  } catch {
-    return [];
-  }
-};
-const guardarInactivos = (l) => {
-  try {
-    localStorage.setItem(CLAVE_INACTIVOS, JSON.stringify(l));
-  } catch {
-    /* sin almacenamiento */
-  }
-};
-
 const VACIO = { nombre: '', codigo: '', descripcion: '', max_personas_carnet: 5 };
 
 function FormParque({ inicial, esNuevo, onGuardar, onCancelar }) {
@@ -84,21 +66,14 @@ function FormParque({ inicial, esNuevo, onGuardar, onCancelar }) {
 }
 
 export default function Parques() {
-  // Preferir GET /catalogo/admin/parques (incluye inactivos). Si no existe, solo los activos + respaldo local.
   const { data, error, loading, reload } = useAsync(async () => {
-    try {
-      const todos = await catalogoApi.todosLosParques();
-      return { activos: todos.filter((p) => p.activo), inactivos: todos.filter((p) => !p.activo), servidor: true };
-    } catch (err) {
-      if (err.status !== 404) throw err;
-      return { activos: await catalogoApi.parques(), inactivos: null, servidor: false };
-    }
+    const todos = await catalogoApi.todosLosParques();
+    return { activos: todos.filter((p) => p.activo), inactivos: todos.filter((p) => !p.activo) };
   }, []);
   const parques = data?.activos;
+  const inactivos = data?.inactivos || [];
   const [editando, setEditando] = useState(null);
   const [creando, setCreando] = useState(false);
-  const [inactivosLocales, setInactivos] = useState(leerInactivos());
-  const inactivos = data?.servidor ? data.inactivos : inactivosLocales;
   const [mensaje, setMensaje] = useState('');
   const [errorAccion, setErrorAccion] = useState(null);
 
@@ -107,9 +82,6 @@ export default function Parques() {
     if (!activo && !window.confirm(`¿Desactivar ${parque.nombre}? Dejará de aparecer para los clientes.`)) return;
     try {
       await catalogoApi.actualizarParque(parque.id, { activo });
-      const lista = activo ? inactivosLocales.filter((p) => p.id !== parque.id) : [...inactivosLocales.filter((p) => p.id !== parque.id), { id: parque.id, nombre: parque.nombre, codigo: parque.codigo }];
-      setInactivos(lista);
-      guardarInactivos(lista);
       setMensaje(activo ? `${parque.nombre} está activo otra vez.` : `${parque.nombre} quedó desactivado.`);
       reload();
     } catch (err) {
@@ -167,17 +139,13 @@ export default function Parques() {
 
       {inactivos.length > 0 && (
         <>
-          <h2 className="subtitulo">{data?.servidor ? 'Parques desactivados' : 'Desactivados desde este navegador'}</h2>
+          <h2 className="subtitulo">Parques desactivados</h2>
           <ul className="lista-admin">
             {inactivos.map((p) => (
               <li key={p.id} className="fila-admin fila-admin--inactiva">
                 <div className="fila-admin__info"><strong>{p.nombre} <code>{p.codigo}</code></strong>{p.descripcion && <span className="texto-suave">{p.descripcion}</span>}</div>
                 <div className="fila-admin__acciones">
                   <Boton variante="secundario" className="btn--chico" onClick={() => cambiarActivo(p, true)}><RotateCcw size={16} /> Reactivar</Boton>
-                  {!data?.servidor && (
-                    <button className="btn-icono" aria-label="Quitar de la lista" title="Quitar de la lista"
-                      onClick={() => { const l = inactivosLocales.filter((x) => x.id !== p.id); setInactivos(l); guardarInactivos(l); }}><X size={18} /></button>
-                  )}
                 </div>
               </li>
             ))}

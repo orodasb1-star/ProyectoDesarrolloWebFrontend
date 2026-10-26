@@ -1,4 +1,4 @@
-import { PlusCircle, ReceiptText, TicketX } from 'lucide-react';
+import { History, PlusCircle, ReceiptText, TicketX } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { visitasApi } from '../../api/endpoints';
@@ -31,8 +31,15 @@ export default function MisVisitas() {
         <Link to="/cliente/pedidos" className="accion-grande">
           <ReceiptText size={28} />
           <span>
-            <strong>Mi historial de pedidos</strong>
-            <small>Brazaletes y tickets de juego</small>
+            <strong>Mis pedidos</strong>
+            <small>Brazaletes y tickets</small>
+          </span>
+        </Link>
+        <Link to="/cliente/historial" className="accion-grande">
+          <History size={28} />
+          <span>
+            <strong>Mi historial completo</strong>
+            <small>Visitas, pedidos y estados</small>
           </span>
         </Link>
       </div>

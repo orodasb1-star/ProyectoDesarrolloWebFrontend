@@ -1,18 +1,9 @@
-import { catalogoApi } from '../api/endpoints';
-import { CATEGORIA_LABEL, money, soloFecha } from '../utils/format';
-import { useAsync } from '../utils/useAsync';
+import { CATEGORIA_LABEL, money } from '../utils/format';
 
-/** Desglose de cobro de un registro de visita, tal como lo guardó el backend. */
+/** Desglose de cobro de un registro de visita, provisto directamente por el backend. */
 export function DesgloseRegistro({ registro }) {
   const gratis = registro.acompanantes?.filter((a) => !a.cobra_entrada).length || 0;
   const pagan = (registro.acompanantes?.length || 0) - gratis;
-
-  // El detalle guardado no trae la categoría de edad; la obtenemos de la oferta del parque.
-  const { data: ofertas } = useAsync(
-    () => catalogoApi.productosDeParque(registro.parque_id, soloFecha(registro.fecha_visita)).catch(() => []),
-    [registro.parque_id, registro.fecha_visita]
-  );
-  const categoriaDe = (ppId) => ofertas?.find((o) => o.parque_producto_id === ppId)?.categoria_edad;
 
   return (
     <div className="desglose">
@@ -38,12 +29,12 @@ export function DesgloseRegistro({ registro }) {
       <table className="resumen__tabla">
         <tbody>
           {registro.detalles?.map((d) => {
-            const cat = d.producto_tipo === 'ENTRADA' ? categoriaDe(d.parque_producto_id) : null;
+            const cat = d.categoria_edad || (d.producto_tipo === 'ENTRADA' ? d.categoria_tarifa : null);
             return (
               <tr key={d.id}>
                 <td>
                   {d.producto_nombre}
-                  {cat ? ` (${CATEGORIA_LABEL[cat]})` : ''}
+                  {cat && cat !== 'UNICA' ? ` (${CATEGORIA_LABEL[cat] || cat})` : ''}
                   <small> × {d.cantidad} a {money(d.precio_unitario)}</small>
                 </td>
                 <td>{money(d.subtotal)}</td>

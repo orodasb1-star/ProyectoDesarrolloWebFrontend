@@ -43,8 +43,11 @@ export const visitasApi = {
   registros: (historial = false) =>
     api.get('/visitas/registros', { query: historial ? { historial: 'true' } : undefined }).then(unwrap),
   registro: (id) => api.get(`/visitas/registros/${id}`).then(unwrap),
+  cotizarPedido: (registroId, items) =>
+    api.post(`/visitas/registros/${registroId}/pedidos/cotizar`, { items }).then(unwrap),
   crearPedido: (registroId, items) => api.post(`/visitas/registros/${registroId}/pedidos`, { items }).then(unwrap),
   misPedidos: () => api.get('/visitas/pedidos').then(unwrap),
+  historial: () => api.get('/visitas/historial').then(unwrap),
   pedidosDeRegistro: (registroId) => api.get(`/visitas/registros/${registroId}/pedidos`).then(unwrap),
   pedido: (id) => api.get(`/visitas/pedidos/${id}`).then(unwrap),
   calificar: (payload) => api.post('/visitas/calificaciones', payload).then(unwrap)

@@ -11,21 +11,7 @@ import { useAsync } from '../../utils/useAsync';
  * juntando los pedidos de cada registro del historial (GET /registros/:id/pedidos).
  */
 async function cargarPedidos() {
-  try {
-    return await visitasApi.misPedidos();
-  } catch (err) {
-    if (err.status !== 404) throw err;
-  }
-  const registros = await visitasApi.registros(true);
-  const listas = await Promise.all(
-    registros.map((r) =>
-      visitasApi
-        .pedidosDeRegistro(r.id)
-        .then((ps) => ps.map((p) => ({ ...p, parque_nombre: r.parque_nombre, codigo_registro: r.codigo_registro })))
-        .catch(() => [])
-    )
-  );
-  return listas.flat().sort((a, b) => new Date(b.created_at) - new Date(a.created_at) || b.id - a.id);
+  return await visitasApi.misPedidos();
 }
 
 function mesDe(fecha) {

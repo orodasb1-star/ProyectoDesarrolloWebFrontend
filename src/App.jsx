@@ -14,6 +14,7 @@ import CalificarVisita from './pages/cliente/CalificarVisita';
 import MisPedidos from './pages/cliente/MisPedidos';
 import NuevoPedido from './pages/cliente/NuevoPedido';
 import { DetallePedido, PagoPedido } from './pages/cliente/DetallePedido';
+import HistorialCliente from './pages/cliente/HistorialCliente';
 
 import Escanear from './pages/empleado/Escanear';
 import DetalleQR from './pages/empleado/DetalleQR';
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="pedidos/nuevo" element={<NuevoPedido />} />
           <Route path="pedidos/:id" element={<DetallePedido />} />
           <Route path="pedidos/:id/pagar" element={<PagoPedido />} />
+          <Route path="historial" element={<HistorialCliente />} />
         </Route>
       </Route>
 
